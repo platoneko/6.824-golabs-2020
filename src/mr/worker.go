@@ -1,13 +1,13 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
 	"net/rpc"
-	"io/ioutil"
 	"os"
-	"encoding/json"
 	"strings"
 )
 
@@ -40,8 +40,8 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-    w := WorkerT{
-		Mapf: mapf,
+	w := WorkerT{
+		Mapf:    mapf,
 		Reducef: reducef,
 	}
 	w.CallRegister()
@@ -119,7 +119,7 @@ func (w *WorkerT) runReduceTask(t *Task) {
 	}
 	data := make([]string, 0, 100)
 	for k, v := range kvReduce {
-		data = append(data, fmt.Sprintf("%v %v\n", k, w.Reducef(k, v))) 
+		data = append(data, fmt.Sprintf("%v %v\n", k, w.Reducef(k, v)))
 	}
 	err := ioutil.WriteFile(outName(t.ID), []byte(strings.Join(data, "")), 0600)
 	if err != nil {
@@ -175,9 +175,9 @@ func (w *WorkerT) CallGetTask() *Task {
 
 func (w *WorkerT) CallReportTask(t *Task, err error) {
 	args := ReportTaskArgs{
-		Done: true,
-		TaskID: t.ID,
-		WorkerID: w.ID,
+		Done:      true,
+		TaskID:    t.ID,
+		WorkerID:  w.ID,
 		TaskPhase: t.Phase,
 	}
 	if err != nil {

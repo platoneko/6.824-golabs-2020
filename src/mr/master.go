@@ -66,7 +66,7 @@ func (m *Master) makeTask(taskID int) *Task {
 	return &task
 }
 
-// Inspect regularly if some task running out of time 
+// Inspect regularly if some task running out of time
 func (m *Master) tickSchedule() {
 	for !m.HasDone {
 		m.schedule()
@@ -157,7 +157,7 @@ func (m *Master) RegisterWorker(args *RegisterArgs, reply *RegisterReply) error 
 // RPC handler. Report task Done or Error and then schedule.
 func (m *Master) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
 	m.Lock.Lock()
-	// A map task may run more than one time cause redundant running 
+	// A map task may run more than one time cause redundant running
 	if args.TaskPhase != m.TaskPhase || m.TaskStats[args.TaskID].WorkerID != args.WorkerID {
 		m.Lock.Unlock()
 		return nil

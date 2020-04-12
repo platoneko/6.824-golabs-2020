@@ -44,9 +44,9 @@ type RegisterReply struct {
 }
 
 type ReportTaskArgs struct {
-	Done bool
-	TaskID int
-	WorkerID int
+	Done      bool
+	TaskID    int
+	WorkerID  int
 	TaskPhase TaskPhase
 }
 
