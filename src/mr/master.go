@@ -30,7 +30,7 @@ type Master struct {
 	NMap      int
 	TaskStats []TaskStat
 	TaskPhase TaskPhase
-	TaskCh    chan Task
+	TaskCh    chan *Task
 	Lock      sync.Mutex
 	NWorker   int
 	HasDone   bool
@@ -86,7 +86,7 @@ func (m *Master) schedule() {
 		switch t.Status {
 		case TaskStatusReady:
 			allDone = false
-			m.TaskCh <- *(m.makeTask(i))
+			m.TaskCh <- m.makeTask(i)
 			m.TaskStats[i].Status = TaskStatusQueue
 		case TaskStatusQueue:
 			allDone = false
@@ -94,13 +94,13 @@ func (m *Master) schedule() {
 			allDone = false
 			if time.Now().Sub(t.StartTime) > TaskTimeout {
 				m.TaskStats[i].Status = TaskStatusQueue
-				m.TaskCh <- *(m.makeTask(i))
+				m.TaskCh <- m.makeTask(i)
 			}
 		case TaskStatusDone:
 		case TaskStatusError:
 			allDone = false
 			m.TaskStats[i].Status = TaskStatusQueue
-			m.TaskCh <- *(m.makeTask(i))
+			m.TaskCh <- m.makeTask(i)
 		default:
 			panic("t.Status undefined\n")
 		}
@@ -141,7 +141,7 @@ func (m *Master) registerTask(args *GetTaskArgs, task *Task) {
 func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	task := <-m.TaskCh
 	reply.Task = task
-	m.registerTask(args, &task)
+	m.registerTask(args, task)
 	return nil
 }
 
@@ -207,9 +207,9 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.NMap = len(files)
 	m.Files = files
 	if m.NReduce > m.NMap {
-		m.TaskCh = make(chan Task, m.NReduce)
+		m.TaskCh = make(chan *Task, m.NReduce)
 	} else {
-		m.TaskCh = make(chan Task, m.NMap)
+		m.TaskCh = make(chan *Task, m.NMap)
 	}
 	m.initMapTasks()
 	m.server()

@@ -170,7 +170,7 @@ func (w *WorkerT) CallGetTask() *Task {
 	if !call("Master.GetTask", &args, &reply) {
 		log.Fatal("GetTask failed, worker process exit!\n")
 	}
-	return &reply.Task
+	return reply.Task
 }
 
 func (w *WorkerT) CallReportTask(t *Task, err error) {
