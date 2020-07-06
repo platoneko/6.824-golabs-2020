@@ -20,6 +20,7 @@ package raft
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"../labrpc"
 )
@@ -44,6 +45,11 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+type LogEntry struct {
+	Term    int
+	Command string
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -57,9 +63,13 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	term   int
-	role   Role
-	killCh chan (struct{})
+	term       int
+	role       Role
+	votedFor   int
+	logEntries []LogEntry
+
+	killCh        chan struct{}
+	electionTimer *time.Timer
 }
 
 type Role int
@@ -68,6 +78,12 @@ const (
 	Follower Role = iota
 	Candidate
 	Leader
+)
+
+const (
+	ElectionTimeout   = 150 * time.Millisecond
+	RPCTimeout        = 100 * time.Millisecond
+	HeartbeatInterval = 100 * time.Millisecond
 )
 
 // return currentTerm and whether this server
@@ -123,63 +139,6 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 //
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-}
-
-//
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	// Your data here (2A).
-}
-
-//
-// example RequestVote RPC handler.
-//
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
-}
-
-//
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
-}
-
-//
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -215,8 +174,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
+	rf.DPrintf("kill\n")
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	rf.killCh <- struct{}{}
 	close(rf.killCh)
 }
 
@@ -246,10 +207,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.term = 0
 	rf.role = Follower
-	rf.killCh = make(chan (struct{}))
+	rf.votedFor = -1
 
+	rf.killCh = make(chan struct{})
+	rf.electionTimer = time.NewTimer(randElectionTimeout())
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	go func() {
+		for {
+			select {
+			case <-rf.killCh:
+				return
+			case <-rf.electionTimer.C:
+				rf.doElection()
+			}
+		}
+	}()
 
 	return rf
 }
