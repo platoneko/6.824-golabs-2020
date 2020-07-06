@@ -47,7 +47,7 @@ type ApplyMsg struct {
 
 type LogEntry struct {
 	Term    int
-	Command string
+	Command interface{}
 }
 
 //
