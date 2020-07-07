@@ -45,11 +45,6 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
-type LogEntry struct {
-	Term    int
-	Command interface{}
-}
-
 //
 // A Go object implementing a single Raft peer.
 //
@@ -81,7 +76,7 @@ const (
 )
 
 const (
-	ElectionTimeout   = 150 * time.Millisecond
+	ElectionTimeout   = 300 * time.Millisecond
 	RPCTimeout        = 100 * time.Millisecond
 	HeartbeatInterval = 100 * time.Millisecond
 )

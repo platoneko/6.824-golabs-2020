@@ -32,8 +32,6 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	defer rf.DPrintf("vote for: %d\n", rf.votedFor)
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -41,6 +39,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 
 	if rf.term > args.Term {
+		rf.DPrintf("candidate expired")
 		return
 	}
 	if rf.term < args.Term {
@@ -54,7 +53,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 	}
-
+	rf.DPrintf("vote for: %d", rf.votedFor)
 }
 
 //
@@ -87,14 +86,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	timer := time.NewTimer(RPCTimeout)
 	okCh := make(chan bool)
 	go func() {
 		okCh <- rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}()
 	select {
-	case <-timer.C:
-		rf.DPrintf("server %d RequestVote RPC timeout\n", server)
+	case <-time.After(RPCTimeout):
+		rf.DPrintf("server %d RequestVote RPC timeout", server)
 		reply.VoteGranted = false
 		reply.Term = args.Term
 		return false
@@ -112,7 +110,6 @@ func randElectionTimeout() time.Duration {
 }
 
 func (rf *Raft) doElection() {
-	rf.DPrintf("doElection\n")
 	rf.mu.Lock()
 	rf.role = Candidate
 	rf.term++
@@ -121,21 +118,21 @@ func (rf *Raft) doElection() {
 	args := RequestVoteArgs{
 		CandidateId: rf.me,
 		Term:        rf.term,
-		LastLogTerm: rf.logEntries[len(rf.logEntries)-1].Term,
 	}
+	rf.DPrintf("start election")
 	rf.mu.Unlock()
 
 	replyCh := make(chan RequestVoteReply)
 
-	for idx, _ := range rf.peers {
-		if idx == rf.me {
+	for i := range rf.peers {
+		if i == rf.me {
 			continue
 		}
 		go func(server int) {
 			reply := RequestVoteReply{}
 			rf.sendRequestVote(server, &args, &reply)
 			replyCh <- reply
-		}(idx)
+		}(i)
 	}
 
 	grantedCount := 1
@@ -144,7 +141,7 @@ func (rf *Raft) doElection() {
 		reply := <-replyCh
 		rf.mu.Lock()
 		if reply.Term > rf.term {
-			rf.DPrintf("receive reply with higher term %d\n", reply.Term)
+			rf.DPrintf("receive reply with higher term %d", reply.Term)
 			rf.term = reply.Term
 			rf.role = Follower
 			rf.votedFor = -1
@@ -153,7 +150,6 @@ func (rf *Raft) doElection() {
 		rf.mu.Unlock()
 		replyCount++
 		if reply.VoteGranted {
-			rf.DPrintf("vote granted\n")
 			grantedCount++
 		}
 
@@ -162,15 +158,15 @@ func (rf *Raft) doElection() {
 		}
 	}
 
-	rf.DPrintf("granted:peers = %d:%d\n", grantedCount, len(rf.peers))
+	rf.DPrintf("granted:peers = %d:%d", grantedCount, len(rf.peers))
 
 	rf.mu.Lock()
 	rf.votedFor = -1
 	if grantedCount > len(rf.peers)/2 {
-		rf.DPrintf("change role to Leader\n")
+		rf.DPrintf("change role to Leader")
 		rf.role = Leader
-		rf.electionTimer.Stop()
 		rf.mu.Unlock()
+		go rf.heartbeat()
 	} else {
 		rf.mu.Unlock()
 	}
