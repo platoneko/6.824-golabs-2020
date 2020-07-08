@@ -58,12 +58,18 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	term       int
-	role       Role
-	votedFor   int
-	logEntries []LogEntry
+	term        int
+	role        Role
+	votedFor    int
+	logEntries  []LogEntry
+	commitIndex int
+	lastApplied int
+	nextIndex   []int
+	matchIndex  []int
 
 	killCh        chan struct{}
+	applyNotifyCh chan struct{}
+	applyCh       chan ApplyMsg
 	electionTimer *time.Timer
 }
 
@@ -79,6 +85,7 @@ const (
 	ElectionTimeout   = 300 * time.Millisecond
 	RPCTimeout        = 100 * time.Millisecond
 	HeartbeatInterval = 100 * time.Millisecond
+	CommitInterval    = 100 * time.Millisecond
 )
 
 // return currentTerm and whether this server
@@ -148,12 +155,21 @@ func (rf *Raft) readPersist(data []byte) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
 	// Your code here (2B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term := rf.term
+	index := len(rf.logEntries)
+	isLeader := rf.role == Leader
+	if isLeader {
+		rf.logEntries = append(rf.logEntries, LogEntry{
+			Term:    term,
+			Command: command,
+		})
+		rf.matchIndex[rf.me] = index
+		rf.nextIndex[rf.me] = index + 1
+		rf.DPrintf("receive from client, last index: %d", index)
+	}
 	return index, term, isLeader
 }
 
@@ -198,14 +214,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.term = 0
 	rf.role = Follower
 	rf.votedFor = -1
+	rf.logEntries = make([]LogEntry, 1, 100)
+	rf.logEntries[0] = LogEntry{
+		Term:    0,
+		Command: nil,
+	}
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
 
 	rf.killCh = make(chan struct{})
 	rf.electionTimer = time.NewTimer(randElectionTimeout())
+	rf.applyNotifyCh = make(chan struct{})
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -216,6 +243,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				return
 			case <-rf.electionTimer.C:
 				rf.doElection()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-rf.killCh:
+				return
+			case <-rf.applyNotifyCh:
+				rf.doApply()
 			}
 		}
 	}()

@@ -48,6 +48,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 	}
 
+	lastIndex := len(rf.logEntries) - 1
+	lastTerm := rf.logEntries[lastIndex].Term
+	if lastTerm > args.LastLogTerm ||
+		lastTerm == args.LastLogTerm && lastIndex > args.LastLogIndex {
+		rf.DPrintf("log newer than candidate's log (%d, %d) > (%d, %d)",
+			lastTerm, lastIndex, args.LastLogTerm, args.LastLogIndex)
+		return
+	}
+
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		rf.role = Follower
 		rf.votedFor = args.CandidateId
@@ -116,8 +125,10 @@ func (rf *Raft) doElection() {
 	rf.votedFor = rf.me
 	rf.electionTimer.Reset(randElectionTimeout())
 	args := RequestVoteArgs{
-		CandidateId: rf.me,
-		Term:        rf.term,
+		CandidateId:  rf.me,
+		Term:         rf.term,
+		LastLogIndex: len(rf.logEntries) - 1,
+		LastLogTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
 	}
 	rf.DPrintf("start election")
 	rf.mu.Unlock()
@@ -165,8 +176,13 @@ func (rf *Raft) doElection() {
 	if grantedCount > len(rf.peers)/2 {
 		rf.DPrintf("change role to Leader")
 		rf.role = Leader
+		nextIndex := len(rf.logEntries)
+		for i := range rf.peers {
+			rf.nextIndex[i] = nextIndex
+		}
 		rf.mu.Unlock()
 		go rf.heartbeat()
+		go rf.leaderCommit()
 	} else {
 		rf.mu.Unlock()
 	}
