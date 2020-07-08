@@ -134,12 +134,15 @@ func (rf *Raft) heartbeat() {
 				rf.mu.Unlock()
 				reply := AppendEntriesReply{}
 				ok := rf.sendAppendEntries(server, &args, &reply)
+				rf.DPrintf("server %d append reply: %#v", server, reply)
 				rf.mu.Lock()
 				if !reply.Success {
 					if reply.Term > rf.term {
 						rf.term = reply.Term
 						rf.role = Follower
 						rf.votedFor = -1
+						rf.electionTimer.Stop()
+						rf.electionTimer.Reset(randElectionTimeout())
 					} else if ok {
 						rf.nextIndex[server] = reply.NextIndex
 						rf.mu.Unlock()
@@ -199,21 +202,17 @@ func (rf *Raft) doApply() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.DPrintf("start apply")
-	logEntries := make([]LogEntry, 0)
 	applied := rf.lastApplied
 	committed := rf.commitIndex
 	if applied < committed {
-		for i := applied + 1; i <= committed; i++ {
-			logEntries = append(logEntries, rf.logEntries[i])
+		for i, entry := range rf.logEntries[applied+1 : committed+1] {
+			msg := ApplyMsg{
+				Command:      entry.Command,
+				CommandIndex: applied + 1 + i,
+				CommandValid: true,
+			}
+			rf.applyCh <- msg
 		}
 		rf.lastApplied = committed
-	}
-	for i, entry := range logEntries {
-		msg := ApplyMsg{
-			Command:      entry.Command,
-			CommandIndex: applied + 1 + i,
-			CommandValid: true,
-		}
-		rf.applyCh <- msg
 	}
 }

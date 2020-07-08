@@ -84,8 +84,8 @@ const (
 const (
 	ElectionTimeout   = 300 * time.Millisecond
 	RPCTimeout        = 100 * time.Millisecond
-	HeartbeatInterval = 100 * time.Millisecond
-	CommitInterval    = 100 * time.Millisecond
+	HeartbeatInterval = 50 * time.Millisecond
+	CommitInterval    = 50 * time.Millisecond
 )
 
 // return currentTerm and whether this server

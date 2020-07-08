@@ -120,20 +120,54 @@ func randElectionTimeout() time.Duration {
 
 func (rf *Raft) doElection() {
 	rf.mu.Lock()
-	rf.role = Candidate
-	rf.term++
 	rf.votedFor = rf.me
 	rf.electionTimer.Reset(randElectionTimeout())
+	rf.mu.Unlock()
+	rf.DPrintf("start pre-election")
+	granted := rf.sendRequestVoteToAll()
+	if !granted {
+		rf.mu.Lock()
+		rf.role = Follower
+		rf.votedFor = -1
+		rf.mu.Unlock()
+		return
+	}
+	rf.mu.Lock()
+	rf.role = Candidate
+	rf.term++
+	rf.mu.Unlock()
+	rf.DPrintf("start election")
+	granted = rf.sendRequestVoteToAll()
+	if !granted {
+		rf.mu.Lock()
+		rf.role = Follower
+		rf.votedFor = -1
+		rf.mu.Unlock()
+		return
+	}
+	rf.mu.Lock()
+	rf.DPrintf("change role to Leader")
+	rf.role = Leader
+	rf.term++
+	nextIndex := len(rf.logEntries)
+	for i := range rf.peers {
+		rf.nextIndex[i] = nextIndex
+	}
+	rf.mu.Unlock()
+	go rf.heartbeat()
+	go rf.leaderCommit()
+}
+
+func (rf *Raft) sendRequestVoteToAll() bool {
+	replyCh := make(chan RequestVoteReply)
+	rf.mu.Lock()
 	args := RequestVoteArgs{
 		CandidateId:  rf.me,
 		Term:         rf.term,
 		LastLogIndex: len(rf.logEntries) - 1,
 		LastLogTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
 	}
-	rf.DPrintf("start election")
 	rf.mu.Unlock()
-
-	replyCh := make(chan RequestVoteReply)
 
 	for i := range rf.peers {
 		if i == rf.me {
@@ -156,7 +190,7 @@ func (rf *Raft) doElection() {
 			rf.term = reply.Term
 			rf.role = Follower
 			rf.votedFor = -1
-			return
+			return false
 		}
 		rf.mu.Unlock()
 		replyCount++
@@ -168,22 +202,9 @@ func (rf *Raft) doElection() {
 			break
 		}
 	}
-
-	rf.DPrintf("granted:peers = %d:%d", grantedCount, len(rf.peers))
-
-	rf.mu.Lock()
-	rf.votedFor = -1
 	if grantedCount > len(rf.peers)/2 {
-		rf.DPrintf("change role to Leader")
-		rf.role = Leader
-		nextIndex := len(rf.logEntries)
-		for i := range rf.peers {
-			rf.nextIndex[i] = nextIndex
-		}
-		rf.mu.Unlock()
-		go rf.heartbeat()
-		go rf.leaderCommit()
+		return true
 	} else {
-		rf.mu.Unlock()
+		return false
 	}
 }

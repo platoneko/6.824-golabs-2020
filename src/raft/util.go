@@ -1,6 +1,9 @@
 package raft
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 
 // Debugging
 const Debug = 0
@@ -25,8 +28,8 @@ func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 		default:
 			panic("Unknow role")
 		}
-		log.Printf("Server %d (Term %d, Role %s): ", rf.me, rf.term, role)
-		log.Printf(format, a...)
+		msg := fmt.Sprintf(format, a...)
+		log.Printf("Server %d (Term %d, Role %s):\n%s", rf.me, rf.term, role, msg)
 	}
 	return
 }
@@ -34,6 +37,6 @@ func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 func min(x, y int) int {
 	if x < y {
 		return x
-	} 
+	}
 	return y
 }
