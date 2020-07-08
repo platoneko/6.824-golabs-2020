@@ -82,8 +82,8 @@ const (
 )
 
 const (
-	ElectionTimeout   = 300 * time.Millisecond
-	RPCTimeout        = 100 * time.Millisecond
+	ElectionTimeout   = 600 * time.Millisecond
+	RPCTimeout        = 200 * time.Millisecond
 	HeartbeatInterval = 50 * time.Millisecond
 	CommitInterval    = 50 * time.Millisecond
 )
