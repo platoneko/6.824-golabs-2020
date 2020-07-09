@@ -33,6 +33,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.DPrintf("leader expired")
 		return
 	}
+
+	defer rf.persist()
+
 	if args.Term > rf.term {
 		rf.term = args.Term
 		rf.state = Follower
@@ -77,6 +80,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	reply.NextIndex = lastNewIndex + 1
 	reply.Success = true
+
 	rf.DPrintf("append success, next index %d", reply.NextIndex)
 	rf.DPrintf("log entries num: %d, commit index: %d", len(rf.logEntries), rf.commitIndex)
 }
@@ -115,8 +119,6 @@ func (rf *Raft) heartbeat() {
 		rf.unlock()
 		for i := range rf.peers {
 			if i == rf.me {
-				rf.electionTimer.Stop()
-				rf.electionTimer.Reset(randElectionTimeout())
 				continue
 			}
 			go func(server int) {
@@ -145,6 +147,7 @@ func (rf *Raft) heartbeat() {
 						rf.votedFor = -1
 						rf.electionTimer.Stop()
 						rf.electionTimer.Reset(randElectionTimeout())
+						rf.persist()
 					} else if ok {
 						rf.nextIndex[server] = reply.NextIndex
 						rf.unlock()

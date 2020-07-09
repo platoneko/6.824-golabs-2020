@@ -18,6 +18,10 @@ package raft
 //
 
 import (
+	"bytes"
+	"fmt"
+	"labgob"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,6 +123,13 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.term)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logEntries)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -141,6 +152,21 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var votedFor int
+	var LogEntries []LogEntry
+	if d.Decode(&term) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&LogEntries) != nil {
+		msg := fmt.Sprintf("Server %d: read persist error", rf.me)
+		log.Fatal(msg)
+	} else {
+		rf.term = term
+		rf.votedFor = votedFor
+		rf.logEntries = LogEntries
+	}
 }
 
 //
@@ -172,6 +198,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.matchIndex[rf.me] = index
 		rf.nextIndex[rf.me] = index + 1
 		rf.DPrintf("receive from client, last index: %d", index)
+		rf.persist()
 	}
 	return index, term, isLeader
 }

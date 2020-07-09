@@ -42,6 +42,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.DPrintf("candidate expired")
 		return
 	}
+
+	defer rf.persist()
+
 	if rf.term < args.Term {
 		rf.term = args.Term
 		rf.state = Follower
@@ -61,6 +64,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.state = Follower
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
+		rf.electionTimer.Stop()
+		rf.electionTimer.Reset(randElectionTimeout())
 	}
 	rf.DPrintf("vote for: %d", rf.votedFor)
 }
@@ -120,8 +125,13 @@ func randElectionTimeout() time.Duration {
 
 func (rf *Raft) doElection() {
 	rf.lock("doElection 0")
-	rf.votedFor = rf.me
 	rf.electionTimer.Reset(randElectionTimeout())
+	if rf.state == Leader {
+		rf.unlock()
+		return
+	}
+	rf.votedFor = rf.me 
+	rf.persist()
 	rf.unlock()
 	rf.DPrintf("start pre-election")
 	granted := rf.sendRequestVoteToAll()
@@ -129,12 +139,14 @@ func (rf *Raft) doElection() {
 		rf.lock("doElection 1")
 		rf.state = Follower
 		rf.votedFor = -1
+		rf.persist()
 		rf.unlock()
 		return
 	}
 	rf.lock("doElection 2")
 	rf.state = Candidate
 	rf.term++
+	rf.persist()
 	rf.unlock()
 	rf.DPrintf("start election")
 	granted = rf.sendRequestVoteToAll()
@@ -142,13 +154,13 @@ func (rf *Raft) doElection() {
 		rf.lock("doElection 3")
 		rf.state = Follower
 		rf.votedFor = -1
+		rf.persist()
 		rf.unlock()
 		return
 	}
 	rf.lock("doElection 4")
 	rf.DPrintf("change state to Leader")
 	rf.state = Leader
-	rf.term++
 	nextIndex := len(rf.logEntries)
 	for i := range rf.peers {
 		rf.nextIndex[i] = nextIndex
