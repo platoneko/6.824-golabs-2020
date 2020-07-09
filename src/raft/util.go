@@ -3,10 +3,33 @@ package raft
 import (
 	"fmt"
 	"log"
+	"time"
 )
 
 // Debugging
 const Debug = 0
+const DeadlockCheck = 0
+
+func (rf *Raft) lock(m string) {
+	rf.mu.Lock()
+	if DeadlockCheck > 0 {
+		go func() {
+			select {
+			case <-time.After(MutexTimeout):
+				log.Printf("Server %d: lock timeout (%s)", rf.me, m)
+			case <-rf.unlockCh:
+				return
+			}
+		}()
+	}
+}
+
+func (rf *Raft) unlock() {
+	if DeadlockCheck > 0 {
+		rf.unlockCh <- struct{}{}
+	}
+	rf.mu.Unlock()
+}
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -17,19 +40,19 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 
 func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
-		var role string
-		switch rf.role {
+		var state string
+		switch rf.state {
 		case Follower:
-			role = "Follower"
+			state = "Follower"
 		case Candidate:
-			role = "Candidate"
+			state = "Candidate"
 		case Leader:
-			role = "Leader"
+			state = "Leader"
 		default:
-			panic("Unknow role")
+			panic("Unknow state")
 		}
 		msg := fmt.Sprintf(format, a...)
-		log.Printf("Server %d (Term %d, Role %s):\n%s", rf.me, rf.term, role, msg)
+		log.Printf("Server %d (Term %d, Role %s):\n%s", rf.me, rf.term, state, msg)
 	}
 	return
 }

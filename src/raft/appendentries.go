@@ -1,6 +1,8 @@
 package raft
 
-import "time"
+import (
+	"time"
+)
 
 type LogEntry struct {
 	Term    int
@@ -23,8 +25,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.lock("AppendEntries")
+	defer rf.unlock()
 	reply.Term = rf.term
 	reply.Success = false
 	if args.Term < rf.term {
@@ -33,7 +35,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	if args.Term > rf.term {
 		rf.term = args.Term
-		rf.role = Follower
+		rf.state = Follower
 		rf.votedFor = -1
 	}
 	rf.electionTimer.Stop()
@@ -69,9 +71,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, lastNewIndex)
-		rf.DPrintf("prepare to apply0")
+		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
-		rf.DPrintf("prepare to apply")
+		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 	}
 	reply.NextIndex = lastNewIndex + 1
 	reply.Success = true
@@ -103,14 +105,14 @@ func (rf *Raft) heartbeat() {
 	rf.DPrintf("start heartbeat")
 	timerCh := time.Tick(HeartbeatInterval)
 	for {
-		rf.mu.Lock()
-		if rf.role != Leader || rf.killed() {
-			rf.mu.Unlock()
+		rf.lock("heartbeat 0")
+		if rf.state != Leader || rf.killed() {
+			rf.unlock()
 			return
 		}
 		rf.DPrintf("send heartbeat")
 		rf.DPrintf("log entries num: %d, commit index: %d", len(rf.logEntries), rf.commitIndex)
-		rf.mu.Unlock()
+		rf.unlock()
 		for i := range rf.peers {
 			if i == rf.me {
 				rf.electionTimer.Stop()
@@ -118,7 +120,7 @@ func (rf *Raft) heartbeat() {
 				continue
 			}
 			go func(server int) {
-				rf.mu.Lock()
+				rf.lock("heartbeat 1")
 				next := rf.nextIndex[server]
 				args := AppendEntriesArgs{
 					Term:         rf.term,
@@ -131,29 +133,29 @@ func (rf *Raft) heartbeat() {
 				if next < len(rf.logEntries) {
 					args.Entries = append(args.Entries, rf.logEntries[next:]...)
 				}
-				rf.mu.Unlock()
+				rf.unlock()
 				reply := AppendEntriesReply{}
 				ok := rf.sendAppendEntries(server, &args, &reply)
 				rf.DPrintf("server %d append reply: %#v", server, reply)
-				rf.mu.Lock()
+				rf.lock("heartbeat 2")
 				if !reply.Success {
 					if reply.Term > rf.term {
 						rf.term = reply.Term
-						rf.role = Follower
+						rf.state = Follower
 						rf.votedFor = -1
 						rf.electionTimer.Stop()
 						rf.electionTimer.Reset(randElectionTimeout())
 					} else if ok {
 						rf.nextIndex[server] = reply.NextIndex
-						rf.mu.Unlock()
+						rf.unlock()
 						return
 					}
-					rf.mu.Unlock()
+					rf.unlock()
 					return
 				}
 				rf.nextIndex[server] = reply.NextIndex
 				rf.matchIndex[server] = reply.NextIndex - 1
-				rf.mu.Unlock()
+				rf.unlock()
 			}(i)
 		}
 		<-timerCh
@@ -165,9 +167,9 @@ func (rf *Raft) leaderCommit() {
 	timerCh := time.Tick(CommitInterval)
 	for {
 		<-timerCh
-		rf.mu.Lock()
-		if rf.role != Leader || rf.killed() {
-			rf.mu.Unlock()
+		rf.lock("leaderCommit")
+		if rf.state != Leader || rf.killed() {
+			rf.unlock()
 			return
 		}
 		rf.DPrintf("leader check commit")
@@ -187,20 +189,20 @@ func (rf *Raft) leaderCommit() {
 			// rf.DPrintf("replicated:peers=%d:%d", replicated, len(rf.peers))
 			if replicated >= majority {
 				rf.commitIndex = i
-				// rf.DPrintf("prepare to apply0")
+				// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 				rf.applyNotifyCh <- struct{}{}
-				// rf.DPrintf("prepare to apply")
+				// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 				break
 			}
 		}
 		rf.DPrintf("after apply commit index %d", rf.commitIndex)
-		rf.mu.Unlock()
+		rf.unlock()
 	}
 }
 
 func (rf *Raft) doApply() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.lock("doApply")
+	defer rf.unlock()
 	rf.DPrintf("start apply")
 	applied := rf.lastApplied
 	committed := rf.commitIndex
@@ -211,7 +213,9 @@ func (rf *Raft) doApply() {
 				CommandIndex: applied + 1 + i,
 				CommandValid: true,
 			}
+			// fmt.Printf("Server %d applyCh 0\n", rf.me)
 			rf.applyCh <- msg
+			// fmt.Printf("Server %d applyCh 1\n", rf.me)
 		}
 		rf.lastApplied = committed
 	}

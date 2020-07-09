@@ -1,7 +1,8 @@
 #!/bin/sh
-x=10
+x=50
 while [ $x -gt 0 ]
 do
-    go test -run 2B
+    echo "left test $x"
+    go test -run Backup2B
     let x--
 done

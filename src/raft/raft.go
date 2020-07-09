@@ -59,7 +59,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	term        int
-	role        Role
+	state       State
 	votedFor    int
 	logEntries  []LogEntry
 	commitIndex int
@@ -68,15 +68,17 @@ type Raft struct {
 	matchIndex  []int
 
 	killCh        chan struct{}
+	unlockCh      chan struct{}
 	applyNotifyCh chan struct{}
+	applyCond     *sync.Cond
 	applyCh       chan ApplyMsg
 	electionTimer *time.Timer
 }
 
-type Role int
+type State int
 
 const (
-	Follower Role = iota
+	Follower State = iota
 	Candidate
 	Leader
 )
@@ -86,6 +88,7 @@ const (
 	RPCTimeout        = 200 * time.Millisecond
 	HeartbeatInterval = 50 * time.Millisecond
 	CommitInterval    = 50 * time.Millisecond
+	MutexTimeout      = 200 * time.Millisecond
 )
 
 // return currentTerm and whether this server
@@ -95,10 +98,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.lock("GetState")
+	defer rf.unlock()
 	term = rf.term
-	isleader = rf.role == Leader
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -156,11 +159,11 @@ func (rf *Raft) readPersist(data []byte) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.lock("Start")
+	defer rf.unlock()
 	term := rf.term
 	index := len(rf.logEntries)
-	isLeader := rf.role == Leader
+	isLeader := rf.state == Leader
 	if isLeader {
 		rf.logEntries = append(rf.logEntries, LogEntry{
 			Term:    term,
@@ -218,7 +221,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.term = 0
-	rf.role = Follower
+	rf.state = Follower
 	rf.votedFor = -1
 	rf.logEntries = make([]LogEntry, 1, 100)
 	rf.logEntries[0] = LogEntry{
@@ -231,6 +234,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, len(rf.peers))
 
 	rf.killCh = make(chan struct{})
+	rf.unlockCh = make(chan struct{})
 	rf.electionTimer = time.NewTimer(randElectionTimeout())
 	rf.applyNotifyCh = make(chan struct{})
 	// initialize from state persisted before a crash

@@ -32,8 +32,8 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.lock("RequestVote")
+	defer rf.unlock()
 
 	reply.Term = rf.term
 	reply.VoteGranted = false
@@ -44,7 +44,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if rf.term < args.Term {
 		rf.term = args.Term
-		rf.role = Follower
+		rf.state = Follower
 		rf.votedFor = -1
 	}
 
@@ -58,7 +58,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		rf.role = Follower
+		rf.state = Follower
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 	}
@@ -119,55 +119,55 @@ func randElectionTimeout() time.Duration {
 }
 
 func (rf *Raft) doElection() {
-	rf.mu.Lock()
+	rf.lock("doElection 0")
 	rf.votedFor = rf.me
 	rf.electionTimer.Reset(randElectionTimeout())
-	rf.mu.Unlock()
+	rf.unlock()
 	rf.DPrintf("start pre-election")
 	granted := rf.sendRequestVoteToAll()
 	if !granted {
-		rf.mu.Lock()
-		rf.role = Follower
+		rf.lock("doElection 1")
+		rf.state = Follower
 		rf.votedFor = -1
-		rf.mu.Unlock()
+		rf.unlock()
 		return
 	}
-	rf.mu.Lock()
-	rf.role = Candidate
+	rf.lock("doElection 2")
+	rf.state = Candidate
 	rf.term++
-	rf.mu.Unlock()
+	rf.unlock()
 	rf.DPrintf("start election")
 	granted = rf.sendRequestVoteToAll()
 	if !granted {
-		rf.mu.Lock()
-		rf.role = Follower
+		rf.lock("doElection 3")
+		rf.state = Follower
 		rf.votedFor = -1
-		rf.mu.Unlock()
+		rf.unlock()
 		return
 	}
-	rf.mu.Lock()
-	rf.DPrintf("change role to Leader")
-	rf.role = Leader
+	rf.lock("doElection 4")
+	rf.DPrintf("change state to Leader")
+	rf.state = Leader
 	rf.term++
 	nextIndex := len(rf.logEntries)
 	for i := range rf.peers {
 		rf.nextIndex[i] = nextIndex
 	}
-	rf.mu.Unlock()
+	rf.unlock()
 	go rf.heartbeat()
 	go rf.leaderCommit()
 }
 
 func (rf *Raft) sendRequestVoteToAll() bool {
 	replyCh := make(chan RequestVoteReply)
-	rf.mu.Lock()
+	rf.lock("sendRequestVoteToAll 0")
 	args := RequestVoteArgs{
 		CandidateId:  rf.me,
 		Term:         rf.term,
 		LastLogIndex: len(rf.logEntries) - 1,
 		LastLogTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
 	}
-	rf.mu.Unlock()
+	rf.unlock()
 
 	for i := range rf.peers {
 		if i == rf.me {
@@ -184,15 +184,16 @@ func (rf *Raft) sendRequestVoteToAll() bool {
 	replyCount := 1
 	for {
 		reply := <-replyCh
-		rf.mu.Lock()
+		rf.lock("sendRequestVoteToAll 1")
 		if reply.Term > rf.term {
 			rf.DPrintf("receive reply with higher term %d", reply.Term)
 			rf.term = reply.Term
-			rf.role = Follower
+			rf.state = Follower
 			rf.votedFor = -1
+			rf.unlock()
 			return false
 		}
-		rf.mu.Unlock()
+		rf.unlock()
 		replyCount++
 		if reply.VoteGranted {
 			grantedCount++
