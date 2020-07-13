@@ -1,8 +1,8 @@
 #!/bin/sh
-x=1
+x=20
 while [ $x -gt 0 ]
 do
     echo "left test $x"
-    go test -run 2C
+    go test -run Figure8Unreliable2C
     let x--
 done

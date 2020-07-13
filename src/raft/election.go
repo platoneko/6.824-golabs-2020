@@ -134,8 +134,7 @@ func (rf *Raft) doElection() {
 	rf.persist()
 	rf.unlock()
 	rf.DPrintf("start pre-election")
-	granted := rf.sendRequestVoteToAll()
-	if !granted {
+	if !rf.sendRequestVoteToAll() {
 		rf.lock("doElection 1")
 		rf.state = Follower
 		rf.votedFor = -1
@@ -149,8 +148,7 @@ func (rf *Raft) doElection() {
 	rf.persist()
 	rf.unlock()
 	rf.DPrintf("start election")
-	granted = rf.sendRequestVoteToAll()
-	if !granted {
+	if !rf.sendRequestVoteToAll() {
 		rf.lock("doElection 3")
 		rf.state = Follower
 		rf.votedFor = -1

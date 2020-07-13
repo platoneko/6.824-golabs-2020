@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = 0
+const Debug = 1
 const DeadlockCheck = 0
 
 func (rf *Raft) lock(m string) {

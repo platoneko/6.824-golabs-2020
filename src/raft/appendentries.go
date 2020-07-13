@@ -19,9 +19,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term      int
-	Success   bool
-	NextIndex int
+	Term          int
+	Success       bool
+	ConflictIndex int
+	ConflictTerm  int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -45,13 +46,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	lastIndex := len(rf.logEntries) - 1
 	if args.PrevLogIndex > lastIndex {
 		rf.DPrintf("missing log (%d < %d)", lastIndex, args.PrevLogIndex)
-		reply.NextIndex = lastIndex + 1
+		reply.ConflictIndex = lastIndex + 1
+		reply.ConflictTerm = 0
 		return
 	}
 	if rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
 		rf.DPrintf("log doesn't contain match term (%d != %d)",
 			rf.logEntries[args.PrevLogIndex].Term, args.PrevLogTerm)
-		reply.NextIndex = args.PrevLogIndex
+		reply.ConflictTerm = rf.logEntries[args.PrevLogIndex].Term
+		i := args.PrevLogIndex - 1
+		for ; i >= 0; i-- {
+			if rf.logEntries[i].Term < reply.ConflictTerm {
+				break
+			}
+		}
+		reply.ConflictIndex = i + 1
 		return
 	}
 
@@ -74,15 +83,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, len(rf.logEntries)-1)
+		rf.commitIndex = min(args.LeaderCommit, leaderLastIndex)
 		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 	}
-	reply.NextIndex = len(rf.logEntries)
 	reply.Success = true
-
-	rf.DPrintf("append success, next index %d", reply.NextIndex)
 	rf.DPrintf("log entries num: %d, commit index: %d", len(rf.logEntries), rf.commitIndex)
 }
 
@@ -150,15 +156,26 @@ func (rf *Raft) heartbeat() {
 						rf.electionTimer.Reset(randElectionTimeout())
 						rf.persist()
 					} else if ok {
-						rf.nextIndex[server] = reply.NextIndex
+						if reply.ConflictTerm == 0 {
+							rf.nextIndex[server] = reply.ConflictIndex
+							rf.unlock()
+							return
+						}
+						i := reply.ConflictIndex
+						for ; i < len(rf.logEntries); i++ {
+							if rf.logEntries[i].Term > reply.ConflictTerm {
+								break;
+							}
+						}
+						rf.nextIndex[server] = i
 						rf.unlock()
 						return
 					}
 					rf.unlock()
 					return
 				}
-				rf.nextIndex[server] = reply.NextIndex
-				rf.matchIndex[server] = reply.NextIndex - 1
+				rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
+				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				rf.unlock()
 			}(i)
 		}
