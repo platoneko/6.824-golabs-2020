@@ -156,20 +156,16 @@ func (rf *Raft) heartbeat() {
 						rf.electionTimer.Reset(randElectionTimeout())
 						rf.persist()
 					} else if ok {
-						if reply.ConflictTerm == 0 {
-							rf.nextIndex[server] = reply.ConflictIndex
-							rf.unlock()
-							return
-						}
-						i := reply.ConflictIndex
-						for ; i < len(rf.logEntries); i++ {
-							if rf.logEntries[i].Term > reply.ConflictTerm {
-								break;
+						conflictIndex := reply.ConflictIndex
+						if reply.ConflictTerm > 0 { // not missing logs
+							if index := rf.searchConflictIndex(0, len(rf.logEntries), reply.ConflictTerm); index != -1 {
+								for index < len(rf.logEntries) && rf.logEntries[index].Term == reply.ConflictTerm {
+									index++ // the last conflict log's next index
+								}
+								conflictIndex = index
 							}
 						}
-						rf.nextIndex[server] = i
-						rf.unlock()
-						return
+						rf.nextIndex[server] = conflictIndex // next sync, send conflicted logs to the follower
 					}
 					rf.unlock()
 					return
@@ -240,4 +236,19 @@ func (rf *Raft) doApply() {
 		}
 		rf.lastApplied = committed
 	}
+}
+
+func (rf *Raft) searchConflictIndex(l, r, term int) int {
+	var cur int
+	for l < r {
+		cur = (l + r) / 2
+		if rf.logEntries[cur].Term < term {
+			l = cur + 1
+		} else if rf.logEntries[cur].Term > term {
+			r = cur - 1
+		} else {
+			return cur
+		}
+	}
+	return -1
 }

@@ -131,18 +131,6 @@ func (rf *Raft) doElection() {
 		return
 	}
 	rf.votedFor = rf.me 
-	rf.persist()
-	rf.unlock()
-	rf.DPrintf("start pre-election")
-	if !rf.sendRequestVoteToAll() {
-		rf.lock("doElection 1")
-		rf.state = Follower
-		rf.votedFor = -1
-		rf.persist()
-		rf.unlock()
-		return
-	}
-	rf.lock("doElection 2")
 	rf.state = Candidate
 	rf.term++
 	rf.persist()
