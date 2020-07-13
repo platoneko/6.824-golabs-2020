@@ -157,15 +157,16 @@ func (rf *Raft) heartbeat() {
 						rf.persist()
 					} else if ok {
 						conflictIndex := reply.ConflictIndex
-						if reply.ConflictTerm > 0 { // not missing logs
+						if reply.ConflictTerm > 0 {
 							if index := rf.searchConflictIndex(0, len(rf.logEntries), reply.ConflictTerm); index != -1 {
 								for index < len(rf.logEntries) && rf.logEntries[index].Term == reply.ConflictTerm {
-									index++ // the last conflict log's next index
+									index++
 								}
 								conflictIndex = index
 							}
 						}
-						rf.nextIndex[server] = conflictIndex // next sync, send conflicted logs to the follower
+						rf.DPrintf("server %d conflict index %d", server, conflictIndex)
+						rf.nextIndex[server] = conflictIndex
 					}
 					rf.unlock()
 					return
