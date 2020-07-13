@@ -36,11 +36,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	defer rf.persist()
 
-	if args.Term > rf.term {
-		rf.term = args.Term
-		rf.state = Follower
-		rf.votedFor = -1
-	}
+	rf.term = args.Term
+	rf.state = Follower
+	rf.votedFor = -1
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randElectionTimeout())
 
@@ -56,7 +54,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.NextIndex = args.PrevLogIndex
 		return
 	}
-	lastNewIndex := args.PrevLogIndex
+
+	leaderLastIndex := args.PrevLogIndex + len(args.Entries)
+	if leaderLastIndex < lastIndex {
+		rf.logEntries = rf.logEntries[:leaderLastIndex+1]
+	}
 	for i, entry := range args.Entries {
 		cur := args.PrevLogIndex + 1 + i
 		if cur < len(rf.logEntries) {
@@ -65,20 +67,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					cur, rf.logEntries[cur].Term, entry.Term)
 				rf.logEntries[cur] = entry
 				rf.logEntries = rf.logEntries[:cur+1]
-				lastNewIndex = cur
 			}
 		} else {
-			rf.logEntries = append(rf.logEntries, entry)
-			lastNewIndex = cur
+			rf.logEntries = append(rf.logEntries, args.Entries[i:]...)
+			break
 		}
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, lastNewIndex)
+		rf.commitIndex = min(args.LeaderCommit, len(rf.logEntries)-1)
 		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 	}
-	reply.NextIndex = lastNewIndex + 1
+	reply.NextIndex = len(rf.logEntries)
 	reply.Success = true
 
 	rf.DPrintf("append success, next index %d", reply.NextIndex)
