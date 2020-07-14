@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"sort"
 	"time"
 )
 
@@ -54,13 +55,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.DPrintf("log doesn't contain match term (%d != %d)",
 			rf.logEntries[args.PrevLogIndex].Term, args.PrevLogTerm)
 		reply.ConflictTerm = rf.logEntries[args.PrevLogIndex].Term
-		i := args.PrevLogIndex - 1
-		for ; i >= 0; i-- {
-			if rf.logEntries[i].Term < reply.ConflictTerm {
-				break
-			}
-		}
-		reply.ConflictIndex = i + 1
+		reply.ConflictIndex = sort.Search(args.PrevLogIndex+1, func(i int) bool { return rf.logEntries[i].Term == reply.ConflictTerm })
 		return
 	}
 
@@ -157,13 +152,9 @@ func (rf *Raft) heartbeat() {
 						rf.persist()
 					} else if ok {
 						conflictIndex := reply.ConflictIndex
-						if reply.ConflictTerm > 0 {
-							if index := rf.searchConflictIndex(0, len(rf.logEntries), reply.ConflictTerm); index != -1 {
-								for index < len(rf.logEntries) && rf.logEntries[index].Term == reply.ConflictTerm {
-									index++
-								}
-								conflictIndex = index
-							}
+						index := sort.Search(len(rf.logEntries), func(i int) bool { return rf.logEntries[i].Term > reply.ConflictTerm })
+						if rf.logEntries[index-1].Term == reply.ConflictTerm {
+							conflictIndex = index
 						}
 						rf.DPrintf("server %d conflict index %d", server, conflictIndex)
 						rf.nextIndex[server] = conflictIndex
@@ -237,19 +228,4 @@ func (rf *Raft) doApply() {
 		}
 		rf.lastApplied = committed
 	}
-}
-
-func (rf *Raft) searchConflictIndex(l, r, term int) int {
-	var cur int
-	for l < r {
-		cur = (l + r) / 2
-		if rf.logEntries[cur].Term < term {
-			l = cur + 1
-		} else if rf.logEntries[cur].Term > term {
-			r = cur - 1
-		} else {
-			return cur
-		}
-	}
-	return -1
 }

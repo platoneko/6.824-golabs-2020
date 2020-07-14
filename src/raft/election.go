@@ -145,15 +145,19 @@ func (rf *Raft) doElection() {
 		return
 	}
 	rf.lock("doElection 4")
-	rf.DPrintf("change state to Leader")
-	rf.state = Leader
-	nextIndex := len(rf.logEntries)
-	for i := range rf.peers {
-		rf.nextIndex[i] = nextIndex
+	if rf.state == Candidate {
+		rf.DPrintf("change state to Leader")
+		rf.state = Leader
+		nextIndex := len(rf.logEntries)
+		for i := range rf.peers {
+			rf.nextIndex[i] = nextIndex
+		}
+		rf.unlock()
+		go rf.heartbeat()
+		go rf.leaderCommit()
+	} else {
+		rf.unlock()
 	}
-	rf.unlock()
-	go rf.heartbeat()
-	go rf.leaderCommit()
 }
 
 func (rf *Raft) sendRequestVoteToAll() bool {
