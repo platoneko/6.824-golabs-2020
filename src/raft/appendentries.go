@@ -40,20 +40,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.term = args.Term
 	rf.state = Follower
-	rf.votedFor = -1
+	rf.votedFor = args.LeaderId
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randElectionTimeout())
 
 	lastIndex := len(rf.logEntries) - 1
 	if args.PrevLogIndex > lastIndex {
-		rf.DPrintf("missing log (%d < %d)", lastIndex, args.PrevLogIndex)
+		// rf.DPrintf("(leader %d) missing log (%d < %d)", args.LeaderId, lastIndex, args.PrevLogIndex)
 		reply.ConflictIndex = lastIndex + 1
 		reply.ConflictTerm = 0
 		return
 	}
 	if rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
-		rf.DPrintf("log doesn't contain match term (%d != %d)",
-			rf.logEntries[args.PrevLogIndex].Term, args.PrevLogTerm)
+		//rf.DPrintf("(leader %d) log doesn't contain match term (%d != %d)",
+		//	args.LeaderId, rf.logEntries[args.PrevLogIndex].Term, args.PrevLogTerm)
 		reply.ConflictTerm = rf.logEntries[args.PrevLogIndex].Term
 		reply.ConflictIndex = sort.Search(args.PrevLogIndex+1, func(i int) bool { return rf.logEntries[i].Term == reply.ConflictTerm })
 		return
@@ -67,8 +67,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		cur := args.PrevLogIndex + 1 + i
 		if cur < len(rf.logEntries) {
 			if rf.logEntries[cur].Term != entry.Term {
-				rf.DPrintf("term conflict log[%d].Term %d != %d",
-					cur, rf.logEntries[cur].Term, entry.Term)
+				// rf.DPrintf("(leader %d) term conflict log[%d].Term %d != %d",
+				// 	args.LeaderId, cur, rf.logEntries[cur].Term, entry.Term)
 				rf.logEntries[cur] = entry
 				rf.logEntries = rf.logEntries[:cur+1]
 			}
@@ -84,7 +84,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 	}
 	reply.Success = true
-	rf.DPrintf("log entries num: %d, commit index: %d", len(rf.logEntries), rf.commitIndex)
+	rf.DPrintf("(leader %d) log entries num: %d, commit index: %d, log entries:\n%#v",
+		args.LeaderId, len(rf.logEntries), rf.commitIndex, rf.logEntries[:min(3, len(rf.logEntries))])
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -108,7 +109,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) heartbeat() {
-	rf.DPrintf("start heartbeat")
+	// rf.DPrintf("start heartbeat")
 	timerCh := time.Tick(HeartbeatInterval)
 	for {
 		rf.lock("heartbeat 0")
@@ -116,8 +117,9 @@ func (rf *Raft) heartbeat() {
 			rf.unlock()
 			return
 		}
-		rf.DPrintf("send heartbeat")
-		rf.DPrintf("log entries num: %d, commit index: %d", len(rf.logEntries), rf.commitIndex)
+		// rf.DPrintf("send heartbeat")
+		rf.DPrintf("log entries num: %d, commit index: %d, log entries:\n%#v",
+			len(rf.logEntries), rf.commitIndex, rf.logEntries[:min(3, len(rf.logEntries))])
 		rf.unlock()
 		for i := range rf.peers {
 			if i == rf.me {
@@ -140,7 +142,7 @@ func (rf *Raft) heartbeat() {
 				rf.unlock()
 				reply := AppendEntriesReply{}
 				ok := rf.sendAppendEntries(server, &args, &reply)
-				rf.DPrintf("server %d append reply: %#v", server, reply)
+				// rf.DPrintf("server %d append reply: %#v", server, reply)
 				rf.lock("heartbeat 2")
 				if !reply.Success {
 					if reply.Term > rf.term {
@@ -156,7 +158,7 @@ func (rf *Raft) heartbeat() {
 						if rf.logEntries[index-1].Term == reply.ConflictTerm {
 							conflictIndex = index
 						}
-						rf.DPrintf("server %d conflict index %d", server, conflictIndex)
+						// rf.DPrintf("server %d conflict index %d", server, conflictIndex)
 						rf.nextIndex[server] = conflictIndex
 					}
 					rf.unlock()
@@ -172,7 +174,7 @@ func (rf *Raft) heartbeat() {
 }
 
 func (rf *Raft) leaderCommit() {
-	rf.DPrintf("start leader commit check")
+	// rf.DPrintf("start leader commit check")
 	timerCh := time.Tick(CommitInterval)
 	for {
 		<-timerCh
@@ -181,8 +183,8 @@ func (rf *Raft) leaderCommit() {
 			rf.unlock()
 			return
 		}
-		rf.DPrintf("leader check commit")
-		rf.DPrintf("nextIndex: %#v, matchIndex: %#v", rf.nextIndex, rf.matchIndex)
+		// rf.DPrintf("leader check commit")
+		// rf.DPrintf("nextIndex: %#v, matchIndex: %#v", rf.nextIndex, rf.matchIndex)
 		n := len(rf.logEntries) - 1
 		majority := len(rf.peers)/2 + 1
 		for i := n; i > rf.commitIndex; i-- {
@@ -212,10 +214,11 @@ func (rf *Raft) leaderCommit() {
 func (rf *Raft) doApply() {
 	rf.lock("doApply")
 	defer rf.unlock()
-	rf.DPrintf("start apply")
+	// rf.DPrintf("start apply")
 	applied := rf.lastApplied
 	committed := rf.commitIndex
 	if applied < committed {
+		rf.DPrintf("apply entries from index %d to %d: %#v", applied+1, committed, rf.logEntries[applied+1:min(committed+1, applied+11)])
 		for i, entry := range rf.logEntries[applied+1 : committed+1] {
 			msg := ApplyMsg{
 				Command:      entry.Command,
