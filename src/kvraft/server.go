@@ -1,28 +1,28 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
-	"log"
-	"../raft"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"../labgob"
+	"../labrpc"
+	"../raft"
 )
 
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
-
+const (
+	AgreeTimeout = 300 * time.Millisecond
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	SeqNum   int32
+	Op       string
+	Key      string
+	Value    string
 }
 
 type KVServer struct {
@@ -35,15 +35,96 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	db      map[string]string
+	seqNum  map[int64]int32
+	killCh  chan struct{}
+	agreeCh map[int]chan Op
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	op := Op{
+		Op:  "Get",
+		Key: args.Key,
+	}
+	reply.Err = ""
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = "not Leader"
+		return
+	}
+
+	ch := make(chan Op)
+	kv.mu.Lock()
+	kv.agreeCh[index] = ch
+	kv.mu.Unlock()
+	var agreeOp Op
+	select {
+	case <-time.After(AgreeTimeout):
+		reply.Err = "agree timeout"
+		kv.mu.Lock()
+		if ch == kv.agreeCh[index] {
+			delete(kv.agreeCh, index)
+		}
+		kv.mu.Unlock()
+		return
+	case agreeOp = <-ch:
+		kv.mu.Lock()
+		delete(kv.agreeCh, index)
+		kv.mu.Unlock()
+	}
+
+	if agreeOp != op {
+		reply.Err = "op overwrited"
+		return
+	}
+	kv.mu.Lock()
+	reply.Value = kv.db[op.Key]
+	kv.mu.Unlock()
+	kv.DPrintf("op %#v agreed", op)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	op := Op{
+		ClientId: args.ClientId,
+		SeqNum:   args.SeqNum,
+		Op:       args.Op,
+		Key:      args.Key,
+		Value:    args.Value,
+	}
+	reply.Err = ""
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = "not Leader"
+		return
+	}
+
+	ch := make(chan Op)
+	kv.mu.Lock()
+	kv.agreeCh[index] = ch
+	kv.mu.Unlock()
+	var agreeOp Op
+	select {
+	case <-time.After(AgreeTimeout):
+		reply.Err = "agree timeout"
+		kv.mu.Lock()
+		if ch == kv.agreeCh[index] {
+			delete(kv.agreeCh, index)
+		}
+		kv.mu.Unlock()
+		return
+	case agreeOp = <-ch:
+		kv.mu.Lock()
+		delete(kv.agreeCh, index)
+		kv.mu.Unlock()
+	}
+
+	if agreeOp != op {
+		reply.Err = "op overwrited"
+		return
+	}
+	kv.DPrintf("op %#v agreed", op)
 }
 
 //
@@ -60,6 +141,7 @@ func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+	kv.killCh <- struct{}{}
 }
 
 func (kv *KVServer) killed() bool {
@@ -96,6 +178,40 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.db = make(map[string]string)
+	kv.seqNum = make(map[int64]int32)
+	kv.agreeCh = make(map[int]chan Op)
+	kv.killCh = make(chan struct{})
+
+	go kv.waitAgree()
 
 	return kv
+}
+
+func (kv *KVServer) waitAgree() {
+	for {
+		select {
+		case <-kv.killCh:
+			return
+		case msg := <-kv.applyCh:
+			op := msg.Command.(Op)
+			kv.mu.Lock()
+			seqNum, ok := kv.seqNum[op.ClientId]
+			if !ok || op.SeqNum > seqNum {
+				kv.seqNum[op.ClientId] = op.SeqNum
+				switch op.Op {
+				case "Put":
+					kv.db[op.Key] = op.Value
+				case "Append":
+					kv.db[op.Key] += op.Value
+				}
+				kv.DPrintf("apply %#v", msg)
+			}
+			ch, ok := kv.agreeCh[msg.CommandIndex]
+			kv.mu.Unlock()
+			if ok {
+				ch <- op
+			}
+		}
+	}
 }
