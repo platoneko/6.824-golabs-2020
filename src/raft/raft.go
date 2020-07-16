@@ -71,6 +71,9 @@ type Raft struct {
 	nextIndex   []int
 	matchIndex  []int
 
+	lastIncludedIndex int
+	lastIncludedTerm  int
+
 	killCh        chan struct{}
 	unlockCh      chan struct{}
 	applyNotifyCh chan struct{}
@@ -109,6 +112,17 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
+func (rf *Raft) encodeRaftState() []byte{
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.term)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logEntries)
+	e.Encode(rf.lastIncludedIndex)
+	e.Encode(rf.lastIncludedTerm)
+	return w.Bytes()
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -123,13 +137,7 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.term)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.logEntries)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	rf.persister.SaveRaftState(rf.encodeRaftState())
 }
 
 //
@@ -156,16 +164,22 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	var term int
 	var votedFor int
-	var LogEntries []LogEntry
+	var logEntries []LogEntry
+	var lastIncludedIndex int
+	var lastIncludedTerm  int
 	if d.Decode(&term) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&LogEntries) != nil {
+		d.Decode(&logEntries) != nil ||
+		d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&lastIncludedTerm) != nil {
 		msg := fmt.Sprintf("Server %d: read persist error", rf.me)
 		log.Fatal(msg)
 	} else {
 		rf.term = term
 		rf.votedFor = votedFor
-		rf.logEntries = LogEntries
+		rf.logEntries = logEntries
+		rf.lastIncludedIndex = lastIncludedIndex
+		rf.lastIncludedTerm = lastIncludedTerm
 	}
 }
 
@@ -188,7 +202,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.lock("Start")
 	defer rf.unlock()
 	term := rf.term
-	index := len(rf.logEntries)
+	index := rf.getEntriesLength()
 	isLeader := rf.state == Leader
 	if isLeader {
 		rf.logEntries = append(rf.logEntries, LogEntry{
@@ -197,7 +211,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		})
 		rf.matchIndex[rf.me] = index
 		rf.nextIndex[rf.me] = index + 1
-		rf.DPrintf("receive from client, last index: %d", index)
+		// rf.DPrintf("receive from client, last index: %d", index)
 		rf.persist()
 	}
 	return index, term, isLeader

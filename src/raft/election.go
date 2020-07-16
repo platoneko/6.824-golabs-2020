@@ -51,8 +51,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 	}
 
-	lastIndex := len(rf.logEntries) - 1
-	lastTerm := rf.logEntries[lastIndex].Term
+	lastIndex := rf.getLastIndex()
+	lastTerm := rf.getLastTerm()
 	if lastTerm > args.LastLogTerm ||
 		lastTerm == args.LastLogTerm && lastIndex > args.LastLogIndex {
 		rf.DPrintf("log newer than candidate's log (%d, %d) > (%d, %d)",
@@ -130,7 +130,7 @@ func (rf *Raft) doElection() {
 		rf.unlock()
 		return
 	}
-	rf.votedFor = rf.me 
+	rf.votedFor = rf.me
 	rf.state = Candidate
 	rf.term++
 	rf.persist()
@@ -148,7 +148,7 @@ func (rf *Raft) doElection() {
 	if rf.state == Candidate {
 		rf.DPrintf("change state to Leader")
 		rf.state = Leader
-		nextIndex := len(rf.logEntries)
+		nextIndex := rf.getEntriesLength()
 		for i := range rf.peers {
 			rf.nextIndex[i] = nextIndex
 		}
@@ -166,8 +166,8 @@ func (rf *Raft) sendRequestVoteToAll() bool {
 	args := RequestVoteArgs{
 		CandidateId:  rf.me,
 		Term:         rf.term,
-		LastLogIndex: len(rf.logEntries) - 1,
-		LastLogTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
+		LastLogIndex: rf.getLastIndex(),
+		LastLogTerm:  rf.getLastTerm(),
 	}
 	rf.unlock()
 

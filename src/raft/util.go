@@ -8,7 +8,7 @@ import (
 
 // Debugging
 const Debug = 0
-const DeadlockCheck = 0
+const DeadlockCheck = 1
 
 func (rf *Raft) lock(m string) {
 	rf.mu.Lock()
@@ -62,4 +62,39 @@ func min(x, y int) int {
 		return x
 	}
 	return y
+}
+
+func max(x, y int) int {
+	if x > y {
+		return x
+	}
+	return y
+}
+
+func (rf *Raft) getEntry(idx int) LogEntry {
+	return rf.logEntries[idx-rf.lastIncludedIndex]
+}
+
+func (rf *Raft) getEntryTerm(idx int) int {
+	return rf.logEntries[idx-rf.lastIncludedIndex].Term
+}
+
+func (rf *Raft) toSliceIndex(idx int) int {
+	return idx - rf.lastIncludedIndex
+}
+
+func (rf *Raft) toEntryIndex(idx int) int {
+	return idx + rf.lastIncludedIndex
+}
+
+func (rf *Raft) getLastIndex() int {
+	return rf.lastIncludedIndex + len(rf.logEntries) - 1
+}
+
+func (rf *Raft) getLastTerm() int {
+	return rf.logEntries[len(rf.logEntries)-1].Term
+}
+
+func (rf *Raft) getEntriesLength() int {
+	return rf.getLastIndex() + 1
 }
