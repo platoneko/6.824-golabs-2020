@@ -233,7 +233,6 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	rf.killCh <- struct{}{}
 	close(rf.killCh)
-	rf.persist()
 }
 
 func (rf *Raft) killed() bool {

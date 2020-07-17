@@ -195,26 +195,13 @@ func (rf *Raft) leaderCommit() {
 		}
 		// rf.DPrintf("leader check commit")
 		// rf.DPrintf("nextIndex: %#v, matchIndex: %#v", rf.nextIndex, rf.matchIndex)
-		n := rf.getLastIndex()
-		majority := len(rf.peers)/2 + 1
-		for i := n; i > rf.commitIndex; i-- {
-			replicated := 0
-			if rf.getEntryTerm(i) != rf.term {
-				break
-			}
-			for server := range rf.peers {
-				if rf.matchIndex[server] >= i {
-					replicated++
-				}
-			}
-			// rf.DPrintf("replicated:peers=%d:%d", replicated, len(rf.peers))
-			if replicated >= majority {
-				rf.commitIndex = i
-				// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
-				rf.applyNotifyCh <- struct{}{}
-				// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
-				break
-			}
+		matched := make([]int, len(rf.peers))
+		copy(matched, rf.matchIndex)
+		sort.Ints(matched)
+		rf.DPrintf("%#v, before apply commit index %d", matched, rf.commitIndex)
+		if n := matched[(len(rf.peers)-1)/2]; n > rf.commitIndex && rf.getEntryTerm(n) == rf.term {
+			rf.commitIndex = n
+			rf.applyNotifyCh <- struct{}{}
 		}
 		rf.DPrintf("%#v, after apply commit index %d", rf.matchIndex, rf.commitIndex)
 		rf.unlock()
