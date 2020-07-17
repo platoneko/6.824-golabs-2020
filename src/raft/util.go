@@ -19,6 +19,8 @@ func (rf *Raft) lock(m string) {
 				log.Printf("Server %d: lock timeout (%s)", rf.me, m)
 			case <-rf.unlockCh:
 				return
+			case <-rf.killCh:
+				return
 			}
 		}()
 	}

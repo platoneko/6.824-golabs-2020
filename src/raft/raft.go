@@ -77,8 +77,8 @@ type Raft struct {
 	killCh        chan struct{}
 	unlockCh      chan struct{}
 	applyNotifyCh chan struct{}
-	applyCond     *sync.Cond
 	applyCh       chan ApplyMsg
+	applyMu       sync.Mutex
 	electionTimer *time.Timer
 }
 
@@ -112,7 +112,7 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
-func (rf *Raft) encodeRaftState() []byte{
+func (rf *Raft) encodeRaftState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.term)
@@ -166,7 +166,7 @@ func (rf *Raft) readPersist(data []byte) {
 	var votedFor int
 	var logEntries []LogEntry
 	var lastIncludedIndex int
-	var lastIncludedTerm  int
+	var lastIncludedTerm int
 	if d.Decode(&term) != nil ||
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&logEntries) != nil ||
@@ -234,6 +234,7 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	rf.killCh <- struct{}{}
 	close(rf.killCh)
+	rf.persist()
 }
 
 func (rf *Raft) killed() bool {
@@ -277,9 +278,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.killCh = make(chan struct{})
 	rf.unlockCh = make(chan struct{})
 	rf.electionTimer = time.NewTimer(randElectionTimeout())
-	rf.applyNotifyCh = make(chan struct{})
+	rf.applyNotifyCh = make(chan struct{}, 100)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.commitIndex = rf.lastIncludedIndex
+	rf.lastApplied = rf.lastIncludedIndex
 
 	go func() {
 		for {

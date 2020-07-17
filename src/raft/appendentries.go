@@ -32,7 +32,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.term
 	reply.Success = false
 	if args.Term < rf.term {
-		// rf.DPrintf("leader expired")
+		rf.DPrintf("leader expired")
 		return
 	}
 
@@ -46,12 +46,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	lastIndex := rf.getLastIndex()
 	if args.PrevLogIndex > lastIndex {
-		// rf.DPrintf("(leader %d) missing log (%d < %d)", args.LeaderId, lastIndex, args.PrevLogIndex)
+		rf.DPrintf("(leader %d) missing log (%d < %d)", args.LeaderId, lastIndex, args.PrevLogIndex)
 		reply.ConflictIndex = lastIndex + 1
 		reply.ConflictTerm = 0
 		return
 	}
-	if rf.getEntry(args.PrevLogIndex).Term != args.PrevLogTerm {
+
+	if rf.toSliceIndex(args.PrevLogIndex) > 0 &&
+		rf.getEntryTerm(args.PrevLogIndex) != args.PrevLogTerm {
 		rf.DPrintf("(leader %d) log doesn't contain match term (%d != %d)",
 			args.LeaderId, rf.getEntryTerm(args.PrevLogIndex), args.PrevLogTerm)
 		reply.ConflictTerm = rf.getEntryTerm(args.PrevLogIndex)
@@ -66,10 +68,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	for i, entry := range args.Entries {
 		cur := rf.toSliceIndex(args.PrevLogIndex + 1 + i)
+		if cur <= 0 {
+			continue
+		}
 		if cur < len(rf.logEntries) {
 			if rf.logEntries[cur].Term != entry.Term {
-				// rf.DPrintf("(leader %d) term conflict log[%d].Term %d != %d",
-				// 	args.LeaderId, cur, rf.logEntries[cur].Term, entry.Term)
+				rf.DPrintf("(leader %d) term conflict log[%d].Term %d != %d",
+					args.LeaderId, cur, rf.logEntries[cur].Term, entry.Term)
 				rf.logEntries[cur] = entry
 				rf.logEntries = rf.logEntries[:cur+1]
 			}
@@ -85,8 +90,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
 	}
 	reply.Success = true
-	//rf.DPrintf("(leader %d) log entries num: %d, commit index: %d, log entries:\n%#v",
-	//	args.LeaderId, len(rf.logEntries), rf.commitIndex, rf.logEntries[:min(3, len(rf.logEntries))])
+	rf.DPrintf("(leader %d) log entries num: %d, commit index: %d, included index: %d",
+		args.LeaderId, rf.getEntriesLength(), rf.commitIndex, rf.lastIncludedIndex)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -96,7 +101,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	}()
 	select {
 	case <-time.After(RPCTimeout):
-		// rf.DPrintf("server %d AppendEntries RPC timeout", server)
+		rf.DPrintf("server %d AppendEntries RPC timeout", server)
 		reply.Success = false
 		reply.Term = args.Term
 		return false
@@ -110,7 +115,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) heartbeat() {
-	// rf.DPrintf("start heartbeat")
+	rf.DPrintf("start heartbeat")
 	timerCh := time.Tick(HeartbeatInterval)
 	for {
 		rf.lock("heartbeat 0")
@@ -118,24 +123,23 @@ func (rf *Raft) heartbeat() {
 			rf.unlock()
 			return
 		}
-		// rf.DPrintf("send heartbeat")
-		//rf.DPrintf("log entries num: %d, commit index: %d, log entries:\n%#v",
-		//	len(rf.logEntries), rf.commitIndex, rf.logEntries[:min(3, len(rf.logEntries))])
+		rf.DPrintf("send heartbeat")
+		rf.DPrintf("log entries num: %d, commit index: %d, included index: %d",
+			rf.getEntriesLength(), rf.commitIndex, rf.lastIncludedIndex)
+		rf.DPrintf("heartbeat: %#v, %d\n", rf.nextIndex, rf.lastIncludedIndex)
 		rf.unlock()
 		for i := range rf.peers {
 			if i == rf.me {
 				continue
 			}
-			rf.lock("heartbeat 3")
-			if rf.nextIndex[i] <= rf.lastIncludedIndex {
-				rf.unlock()
-				go rf.syncSnapshot(i)
-				continue
-			}
-			rf.unlock()
 			go func(server int) {
 				rf.lock("heartbeat 1")
 				next := rf.nextIndex[server]
+				if next <= rf.lastIncludedIndex {
+					rf.unlock()
+					rf.syncSnapshot(i)
+					return
+				}
 				args := AppendEntriesArgs{
 					Term:         rf.term,
 					LeaderId:     rf.me,
@@ -166,7 +170,7 @@ func (rf *Raft) heartbeat() {
 						if rf.logEntries[index-1].Term == reply.ConflictTerm {
 							conflictIndex = rf.toEntryIndex(index)
 						}
-						// rf.DPrintf("server %d conflict index %d", server, conflictIndex)
+						rf.DPrintf("server %d conflict index %d", server, conflictIndex)
 						rf.nextIndex[server] = conflictIndex
 					}
 					return
@@ -212,29 +216,35 @@ func (rf *Raft) leaderCommit() {
 				break
 			}
 		}
-		// rf.DPrintf("after apply commit index %d", rf.commitIndex)
+		rf.DPrintf("%#v, after apply commit index %d", rf.matchIndex, rf.commitIndex)
 		rf.unlock()
 	}
 }
 
 func (rf *Raft) doApply() {
+	rf.applyMu.Lock()
+	defer rf.applyMu.Unlock()
 	rf.lock("doApply")
-	defer rf.unlock()
-	// rf.DPrintf("start apply")
+	rf.DPrintf("start apply")
 	applied := rf.lastApplied
 	committed := rf.commitIndex
 	if applied < committed {
-		// rf.DPrintf("apply entries from index %d to %d: %#v", applied+1, committed, rf.logEntries[applied+1:min(committed+1, applied+11)])
-		for i, entry := range rf.logEntries[rf.toSliceIndex(applied+1):rf.toSliceIndex(committed+1)] {
+		rf.lastApplied = committed
+		entries := make([]LogEntry, 0)
+		entries = append(entries, rf.logEntries[rf.toSliceIndex(applied+1):rf.toSliceIndex(committed+1)]...)
+		rf.unlock()
+		for i, entry := range entries {
 			msg := ApplyMsg{
 				Command:      entry.Command,
 				CommandIndex: applied + 1 + i,
 				CommandValid: true,
 			}
-			// fmt.Printf("Server %d applyCh 0\n", rf.me)
+			// log.Printf("Server %d send apply %d to chan", rf.me, msg.CommandIndex)
 			rf.applyCh <- msg
 			// fmt.Printf("Server %d applyCh 1\n", rf.me)
 		}
-		rf.lastApplied = committed
+		rf.DPrintf("apply entries from index %d to %d", applied+1, committed)
+	} else {
+		rf.unlock()
 	}
 }

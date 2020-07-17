@@ -1,6 +1,8 @@
 package raft
 
-import "time"
+import (
+	"time"
+)
 
 type InstallSnapshotArgs struct {
 	Term              int
@@ -16,10 +18,11 @@ type InstallSnapshotReply struct {
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.lock("InstallSnapshot")
-	defer rf.unlock()
+
 	reply.Term = rf.term
 	if args.Term < rf.term {
 		rf.DPrintf("leader expired")
+		rf.unlock()
 		return
 	}
 
@@ -30,7 +33,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.electionTimer.Reset(randElectionTimeout())
 
 	if args.LastIncludedIndex <= rf.lastIncludedIndex {
+		rf.persist()
 		rf.DPrintf("snapshot rpc expired(%d <= %d)", args.LastIncludedIndex, rf.lastIncludedIndex)
+		rf.unlock()
 		return
 	}
 
@@ -50,11 +55,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
 	rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
+	rf.unlock()
 
 	rf.applyCh <- ApplyMsg{
 		CommandValid: false,
 		Command:      args.Data,
-		CommandIndex: -1,
+		CommandIndex: args.LastIncludedIndex,
 	}
 }
 
@@ -106,6 +112,7 @@ func (rf *Raft) syncSnapshot(server int) {
 }
 
 func (rf *Raft) DoSnapshot(idx int, data []byte) {
+	// log.Printf("server %d DoSnapshot %d, raftstate size %d", rf.me, idx, rf.persister.RaftStateSize())
 	rf.lock("DoSnapshot")
 	defer rf.unlock()
 
@@ -113,11 +120,12 @@ func (rf *Raft) DoSnapshot(idx int, data []byte) {
 		rf.DPrintf("delayed snapshot(%d <= %d)", idx, rf.lastIncludedIndex)
 		return
 	}
-
 	rf.logEntries = rf.logEntries[rf.toSliceIndex(idx):]
 	rf.lastIncludedIndex = idx
 	rf.lastIncludedTerm = rf.logEntries[0].Term
 	rf.persistAndSnapshot(data)
+	rf.DPrintf("DoSnapshot: %d", rf.lastIncludedIndex)
+	// log.Printf("server %d DoSnapshot %d done, raftstate size %d", rf.me, idx, rf.persister.RaftStateSize())
 }
 
 func (rf *Raft) persistAndSnapshot(snapshot []byte) {
