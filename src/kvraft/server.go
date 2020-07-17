@@ -1,6 +1,9 @@
 package kvraft
 
 import (
+	"bytes"
+	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +15,7 @@ import (
 
 const (
 	AgreeTimeout = 300 * time.Millisecond
+	MutexTimeout = 200 * time.Millisecond
 )
 
 type Op struct {
@@ -33,12 +37,14 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
+	persister    *raft.Persister
 
 	// Your definitions here.
-	db      map[string]string
-	seqNum  map[int64]int32
-	killCh  chan struct{}
-	agreeCh map[int]chan Op
+	db       map[string]string
+	seqNum   map[int64]int32
+	killCh   chan struct{}
+	unlockCh chan struct{}
+	agreeCh  map[int]chan Op
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -49,39 +55,43 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 	reply.Err = ""
 	index, _, isLeader := kv.rf.Start(op)
+
 	if !isLeader {
 		reply.Err = "not Leader"
 		return
 	}
 
 	ch := make(chan Op)
-	kv.mu.Lock()
+	kv.lock("Get 1")
 	kv.agreeCh[index] = ch
-	kv.mu.Unlock()
+	kv.unlock()
 	var agreeOp Op
 	select {
+	case <-kv.killCh:
+		reply.Err = "kill"
+		return
 	case <-time.After(AgreeTimeout):
 		reply.Err = "agree timeout"
-		kv.mu.Lock()
+		kv.lock("Get 2")
 		if ch == kv.agreeCh[index] {
 			delete(kv.agreeCh, index)
 		}
-		kv.mu.Unlock()
+		kv.unlock()
 		return
 	case agreeOp = <-ch:
-		kv.mu.Lock()
+		kv.lock("Get 3")
 		delete(kv.agreeCh, index)
-		kv.mu.Unlock()
+		kv.unlock()
 	}
 
 	if agreeOp != op {
 		reply.Err = "op overwrited"
 		return
 	}
-	kv.mu.Lock()
+	kv.lock("Get 3")
 	reply.Value = kv.db[op.Key]
-	kv.mu.Unlock()
-	kv.DPrintf("op %#v agreed", op)
+	kv.unlock()
+	// kv.DPrintf("op %#v agreed", op)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -95,36 +105,40 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	reply.Err = ""
 	index, _, isLeader := kv.rf.Start(op)
+
 	if !isLeader {
 		reply.Err = "not Leader"
 		return
 	}
 
 	ch := make(chan Op)
-	kv.mu.Lock()
+	kv.lock("PutAppend 1")
 	kv.agreeCh[index] = ch
-	kv.mu.Unlock()
+	kv.unlock()
 	var agreeOp Op
 	select {
+	case <-kv.killCh:
+		reply.Err = "kill"
+		return
 	case <-time.After(AgreeTimeout):
 		reply.Err = "agree timeout"
-		kv.mu.Lock()
+		kv.lock("PutAppend 2")
 		if ch == kv.agreeCh[index] {
 			delete(kv.agreeCh, index)
 		}
-		kv.mu.Unlock()
+		kv.unlock()
 		return
 	case agreeOp = <-ch:
-		kv.mu.Lock()
+		kv.lock("PutAppend 3")
 		delete(kv.agreeCh, index)
-		kv.mu.Unlock()
+		kv.unlock()
 	}
 
 	if agreeOp != op {
 		reply.Err = "op overwrited"
 		return
 	}
-	kv.DPrintf("op %#v agreed", op)
+	// kv.DPrintf("op %#v agreed", op)
 }
 
 //
@@ -138,6 +152,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // to suppress debug output from a Kill()ed instance.
 //
 func (kv *KVServer) Kill() {
+	kv.DPrintf("kill")
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
@@ -171,6 +186,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 
 	// You may need initialization code here.
 
@@ -182,6 +198,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.seqNum = make(map[int64]int32)
 	kv.agreeCh = make(map[int]chan Op)
 	kv.killCh = make(chan struct{})
+	kv.unlockCh = make(chan struct{})
+
+	kv.readPersist(persister.ReadSnapshot())
 
 	go kv.waitAgree()
 
@@ -189,13 +208,25 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 }
 
 func (kv *KVServer) waitAgree() {
+	lastIncludedIndex := 0
 	for {
 		select {
 		case <-kv.killCh:
 			return
 		case msg := <-kv.applyCh:
+			kv.DPrintf("receive apply %d from chan", msg.CommandIndex)
+			if !msg.CommandValid {
+				kv.lock("waitAgree 1")
+				kv.readPersist(msg.Command.([]byte))
+				kv.unlock()
+				lastIncludedIndex = msg.CommandIndex
+				break
+			}
+			if msg.CommandIndex <= lastIncludedIndex {
+				break
+			}
 			op := msg.Command.(Op)
-			kv.mu.Lock()
+			kv.lock("waitAgree 2")
 			seqNum, ok := kv.seqNum[op.ClientId]
 			if !ok || op.SeqNum > seqNum {
 				kv.seqNum[op.ClientId] = op.SeqNum
@@ -205,13 +236,52 @@ func (kv *KVServer) waitAgree() {
 				case "Append":
 					kv.db[op.Key] += op.Value
 				}
-				kv.DPrintf("apply %#v", msg)
+				// kv.DPrintf("apply %#v", msg)
 			}
+			kv.doSnapshot(msg.CommandIndex)
+			kv.DPrintf("kv doSnapshot %d", msg.CommandIndex)
 			ch, ok := kv.agreeCh[msg.CommandIndex]
-			kv.mu.Unlock()
+			kv.unlock()
 			if ok {
 				ch <- op
 			}
 		}
 	}
+}
+
+func (kv *KVServer) readPersist(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var seqNum map[int64]int32
+	var db map[string]string
+	if d.Decode(&seqNum) != nil ||
+		d.Decode(&db) != nil {
+		msg := fmt.Sprintf("Server %d: read persist error", kv.me)
+		log.Fatal(msg)
+	} else {
+		kv.seqNum = seqNum
+		kv.db = db
+	}
+}
+
+func (kv *KVServer) encodeSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.seqNum)
+	e.Encode(kv.db)
+	return w.Bytes()
+}
+
+func (kv *KVServer) doSnapshot(idx int) {
+	if kv.maxraftstate < 0 {
+		return
+	}
+	if kv.persister.RaftStateSize() < kv.maxraftstate/2 {
+		return
+	}
+	data := kv.encodeSnapshot()
+	go kv.rf.DoSnapshot(idx, data)
 }

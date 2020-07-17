@@ -4,9 +4,12 @@ import (
 	"crypto/rand"
 	"math/big"
 	"sync/atomic"
+	"time"
 
 	"../labrpc"
 )
+
+const RPCTimeout = 400 * time.Millisecond
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -31,6 +34,40 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
+func (ck *Clerk) sendGet(args *GetArgs, reply *GetReply) bool {
+	okCh := make(chan bool)
+	go func() {
+		okCh <- ck.servers[ck.leaderId].Call("KVServer.Get", args, reply)
+	}()
+	select {
+	case <-time.After(RPCTimeout):
+		reply.Err = "rpc error"
+		return false
+	case ok := <-okCh:
+		if !ok {
+			reply.Err = "rpc error"
+		}
+		return ok
+	}
+}
+
+func (ck *Clerk) sendPutAppend(args *PutAppendArgs, reply *PutAppendReply) bool {
+	okCh := make(chan bool)
+	go func() {
+		okCh <- ck.servers[ck.leaderId].Call("KVServer.PutAppend", args, reply)
+	}()
+	select {
+	case <-time.After(RPCTimeout):
+		reply.Err = "rpc error"
+		return false
+	case ok := <-okCh:
+		if !ok {
+			reply.Err = "rpc error"
+		}
+		return ok
+	}
+}
+
 //
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -45,12 +82,12 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	args := GetArgs {
+	args := GetArgs{
 		Key: key,
 	}
 	for {
 		reply := GetReply{}
-		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
+		ok := ck.sendGet(&args, &reply)
 		if !ok || reply.Err != "" {
 			ck.changeLeader()
 			continue
@@ -81,7 +118,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 	for {
 		reply := PutAppendReply{}
-		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
+		ok := ck.sendPutAppend(&args, &reply)
 		if !ok || reply.Err != "" {
 			ck.changeLeader()
 			continue
