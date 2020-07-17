@@ -222,8 +222,6 @@ func (rf *Raft) leaderCommit() {
 }
 
 func (rf *Raft) doApply() {
-	rf.applyMu.Lock()
-	defer rf.applyMu.Unlock()
 	rf.lock("doApply")
 	rf.DPrintf("start apply")
 	applied := rf.lastApplied

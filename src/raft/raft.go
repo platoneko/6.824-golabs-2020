@@ -78,7 +78,6 @@ type Raft struct {
 	unlockCh      chan struct{}
 	applyNotifyCh chan struct{}
 	applyCh       chan ApplyMsg
-	applyMu       sync.Mutex
 	electionTimer *time.Timer
 }
 
