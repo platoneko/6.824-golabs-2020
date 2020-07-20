@@ -62,10 +62,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	leaderLastIndex := args.PrevLogIndex + len(args.Entries)
-	if leaderLastIndex < lastIndex {
-		rf.logEntries = rf.logEntries[:rf.toSliceIndex(leaderLastIndex)+1]
-	}
 	for i, entry := range args.Entries {
 		cur := rf.toSliceIndex(args.PrevLogIndex + 1 + i)
 		if cur <= 0 {
@@ -84,7 +80,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, leaderLastIndex)
+		rf.commitIndex = min(args.LeaderCommit, rf.getLastIndex())
 		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
