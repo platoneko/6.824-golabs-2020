@@ -40,7 +40,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.term = args.Term
 	rf.state = Follower
-	rf.votedFor = args.LeaderId
+
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randElectionTimeout())
 

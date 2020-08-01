@@ -20,12 +20,12 @@ package raft
 import (
 	"bytes"
 	"fmt"
-	"labgob"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"../labgob"
 	"../labrpc"
 )
 
