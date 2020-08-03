@@ -80,7 +80,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.getLastIndex())
+		rf.commitIndex = min(args.LeaderCommit, args.PrevLogIndex + len(args.Entries))
 		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
