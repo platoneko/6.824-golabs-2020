@@ -38,8 +38,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	defer rf.persist()
 
-	rf.term = args.Term
-	rf.state = Follower
+	if args.Term > rf.term || rf.state == Candidate {
+		rf.term = args.Term
+		rf.state = Follower
+		rf.votedFor = -1
+	}
 
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randElectionTimeout())

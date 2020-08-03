@@ -54,7 +54,7 @@ func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 			panic("Unknow state")
 		}
 		msg := fmt.Sprintf(format, a...)
-		log.Printf("Server %d (Term %d, Role %s):\n%s", rf.me, rf.term, state, msg)
+		log.Printf("Server %d (Term %d, State %s):\n%s", rf.me, rf.term, state, msg)
 	}
 	return
 }

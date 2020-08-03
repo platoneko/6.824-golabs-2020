@@ -26,9 +26,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		return
 	}
 
-	rf.term = args.Term
-	rf.state = Follower
-	rf.votedFor = args.LeaderId
+	if args.Term > rf.term || rf.state == Candidate {
+		rf.term = args.Term
+		rf.state = Follower
+		rf.votedFor = -1
+	}
+	
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randElectionTimeout())
 
