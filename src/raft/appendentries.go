@@ -83,7 +83,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, args.PrevLogIndex + len(args.Entries))
+		rf.commitIndex = min(args.LeaderCommit, args.PrevLogIndex+len(args.Entries))
 		// fmt.Printf("Server %d applyNotifyCh 0\n", rf.me)
 		rf.applyNotifyCh <- struct{}{}
 		// fmt.Printf("Server %d applyNotifyCh 1\n", rf.me)
@@ -164,10 +164,12 @@ func (rf *Raft) heartbeat() {
 						rf.persist()
 					} else if ok {
 						conflictIndex := reply.ConflictIndex
-						index := max(sort.Search(len(rf.logEntries),
-							func(i int) bool { return rf.logEntries[i].Term > reply.ConflictTerm }), 1)
-						if rf.logEntries[index-1].Term == reply.ConflictTerm {
-							conflictIndex = rf.toEntryIndex(index)
+						if reply.ConflictTerm != 0 {
+							index := max(sort.Search(len(rf.logEntries),
+								func(i int) bool { return rf.logEntries[i].Term > reply.ConflictTerm }), 1)
+							if rf.logEntries[index-1].Term == reply.ConflictTerm {
+								conflictIndex = rf.toEntryIndex(index)
+							}
 						}
 						rf.DPrintf("server %d conflict index %d", server, conflictIndex)
 						rf.nextIndex[server] = conflictIndex
